@@ -1,67 +1,42 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  GameRole,
+  getRoleComposition,
+} from "@/lib/game-rules";
 
 type Player = {
   id: string;
   nickname: string;
 };
 
-type Role =
-  | "werewolf"
-  | "seer"
-  | "doctor"
-  | "villager";
-
-function shuffleArray<T>(items: T[]): T[] {
+function shuffleArray<T>(
+  items: T[],
+): T[] {
   const shuffled = [...items];
 
   for (
-    let index = shuffled.length - 1;
+    let index =
+      shuffled.length - 1;
     index > 0;
     index -= 1
   ) {
-    const randomIndex = Math.floor(
-      Math.random() * (index + 1),
-    );
+    const randomIndex =
+      Math.floor(
+        Math.random() *
+          (index + 1),
+      );
 
-    [shuffled[index], shuffled[randomIndex]] = [
+    [
+      shuffled[index],
+      shuffled[randomIndex],
+    ] = [
       shuffled[randomIndex],
       shuffled[index],
     ];
   }
 
   return shuffled;
-}
-
-function getRoleComposition(playerCount: number) {
-  let werewolfCount = 1;
-
-  if (playerCount >= 7 && playerCount <= 10) {
-    werewolfCount = 2;
-  } else if (
-    playerCount >= 11 &&
-    playerCount <= 14
-  ) {
-    werewolfCount = 3;
-  } else if (playerCount >= 15) {
-    werewolfCount = 4;
-  }
-
-  const seerCount = 1;
-  const doctorCount = 1;
-
-  const villagerCount =
-    playerCount -
-    werewolfCount -
-    seerCount -
-    doctorCount;
-
-  return {
-    werewolfCount,
-    seerCount,
-    doctorCount,
-    villagerCount,
-  };
 }
 
 export async function POST(
@@ -73,21 +48,31 @@ export async function POST(
   },
 ) {
   try {
-    const { roomCode } = await context.params;
+    const { roomCode } =
+      await context.params;
+
     const cleanRoomCode =
-      roomCode.trim().toUpperCase();
+      roomCode
+        .trim()
+        .toUpperCase();
 
-    const { data: room, error: roomError } =
-      await supabaseAdmin
-        .from("rooms")
-        .select("id, code, status")
-        .eq("code", cleanRoomCode)
-        .single();
+    const {
+      data: room,
+      error: roomError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .select("id, code")
+      .eq("code", cleanRoomCode)
+      .single();
 
-    if (roomError || !room) {
+    if (
+      roomError ||
+      !room
+    ) {
       return NextResponse.json(
         {
-          error: "Room tidak ditemukan.",
+          error:
+            "Room tidak ditemukan.",
         },
         {
           status: 404,
@@ -95,22 +80,29 @@ export async function POST(
       );
     }
 
-    const { data: players, error: playersError } =
-      await supabaseAdmin
-        .from("players")
-        .select("id, nickname")
-        .eq("room_id", room.id)
-        .order("created_at", {
-          ascending: true,
-        });
+    const {
+      data: players,
+      error: playersError,
+    } = await supabaseAdmin
+      .from("players")
+      .select(
+        "id, nickname",
+      )
+      .eq("room_id", room.id)
+      .order("created_at", {
+        ascending: true,
+      });
 
     if (playersError) {
-      console.error(playersError);
+      console.error(
+        "Assign roles players error:",
+        playersError,
+      );
 
       return NextResponse.json(
         {
           error:
-            "Gagal mengambil daftar pemain.",
+            "Gagal mengambil pemain.",
         },
         {
           status: 500,
@@ -118,13 +110,17 @@ export async function POST(
       );
     }
 
-    const playerList = (players ?? []) as Player[];
+    const playerList =
+      (players ?? []) as Player[];
 
-    if (playerList.length < 5) {
+    if (
+      playerList.length < 5 ||
+      playerList.length > 15
+    ) {
       return NextResponse.json(
         {
           error:
-            "Minimal 5 pemain untuk membagikan role.",
+            "Jumlah pemain harus 5 sampai 15.",
         },
         {
           status: 400,
@@ -132,33 +128,25 @@ export async function POST(
       );
     }
 
-    const composition = getRoleComposition(
-      playerList.length,
-    );
-
-    if (composition.villagerCount < 1) {
-      return NextResponse.json(
-        {
-          error:
-            "Komposisi role tidak valid.",
-        },
-        {
-          status: 400,
-        },
+    const composition =
+      getRoleComposition(
+        playerList.length,
       );
-    }
 
-    const roles: Role[] = [
-      ...Array<Role>(
+    const roles: GameRole[] = [
+      ...Array<GameRole>(
         composition.werewolfCount,
       ).fill("werewolf"),
-      ...Array<Role>(
+
+      ...Array<GameRole>(
         composition.seerCount,
       ).fill("seer"),
-      ...Array<Role>(
+
+      ...Array<GameRole>(
         composition.doctorCount,
       ).fill("doctor"),
-      ...Array<Role>(
+
+      ...Array<GameRole>(
         composition.villagerCount,
       ).fill("villager"),
     ];
@@ -166,30 +154,47 @@ export async function POST(
     const shuffledPlayers =
       shuffleArray(playerList);
 
-    const shuffledRoles = shuffleArray(roles);
+    const shuffledRoles =
+      shuffleArray(roles);
 
-    const assignments = shuffledPlayers.map(
-      (player, index) => ({
-        room_id: room.id,
-        player_id: player.id,
-        role: shuffledRoles[index],
-      }),
-    );
+    const assignments =
+      shuffledPlayers.map(
+        (player, index) => ({
+          room_id: room.id,
+          player_id:
+            player.id,
+          role:
+            shuffledRoles[index],
+        }),
+      );
 
-    // Hapus pembagian sebelumnya saat rematch.
-    const { error: deleteError } =
-      await supabaseAdmin
-        .from("player_roles")
-        .delete()
-        .eq("room_id", room.id);
+    await supabaseAdmin
+      .from("night_actions")
+      .delete()
+      .eq("room_id", room.id);
 
-    if (deleteError) {
-      console.error(deleteError);
+    await supabaseAdmin
+      .from("day_votes")
+      .delete()
+      .eq("room_id", room.id);
+
+    const {
+      error: deleteRoleError,
+    } = await supabaseAdmin
+      .from("player_roles")
+      .delete()
+      .eq("room_id", room.id);
+
+    if (deleteRoleError) {
+      console.error(
+        "Delete roles error:",
+        deleteRoleError,
+      );
 
       return NextResponse.json(
         {
           error:
-            "Gagal menghapus role sebelumnya.",
+            "Gagal membersihkan role lama.",
         },
         {
           status: 500,
@@ -197,17 +202,22 @@ export async function POST(
       );
     }
 
-    const { error: roleError } =
-      await supabaseAdmin
-        .from("player_roles")
-        .insert(assignments);
+    const {
+      error: insertRoleError,
+    } = await supabaseAdmin
+      .from("player_roles")
+      .insert(assignments);
 
-    if (roleError) {
-      console.error(roleError);
+    if (insertRoleError) {
+      console.error(
+        "Insert roles error:",
+        insertRoleError,
+      );
 
       return NextResponse.json(
         {
-          error: "Gagal menyimpan role.",
+          error:
+            "Gagal membagikan role.",
         },
         {
           status: 500,
@@ -215,40 +225,51 @@ export async function POST(
       );
     }
 
-    const { error: playerUpdateError } =
-      await supabaseAdmin
-        .from("players")
-        .update({
-          is_alive: true,
-          is_ready: false,
-        })
-        .eq("room_id", room.id);
+    const {
+      error: playerUpdateError,
+    } = await supabaseAdmin
+      .from("players")
+      .update({
+        is_alive: true,
+        is_ready: false,
+      })
+      .eq("room_id", room.id);
 
     if (playerUpdateError) {
-      console.error(playerUpdateError);
+      console.error(
+        "Reset players error:",
+        playerUpdateError,
+      );
     }
 
-    const { error: roomUpdateError } =
-      await supabaseAdmin
-        .from("rooms")
-        .update({
-          status: "playing",
-          phase: "role_reveal",
-          day_number: 1,
-          announcement:
-            "Check your role privately.",
-          eliminated_player_name: null,
-          winner: null,
-        })
-        .eq("id", room.id);
+    const {
+      error: roomUpdateError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .update({
+        status: "playing",
+        phase: "role_reveal",
+        night_step: null,
+        day_number: 1,
+        night_number: 1,
+        announcement:
+          "Check your role privately.",
+        eliminated_player_name:
+          null,
+        winner: null,
+      })
+      .eq("id", room.id);
 
     if (roomUpdateError) {
-      console.error(roomUpdateError);
+      console.error(
+        "Update room error:",
+        roomUpdateError,
+      );
 
       return NextResponse.json(
         {
           error:
-            "Role tersimpan, tetapi fase room gagal diperbarui.",
+            "Role dibagikan, tetapi room gagal diperbarui.",
         },
         {
           status: 500,
@@ -258,16 +279,22 @@ export async function POST(
 
     return NextResponse.json({
       success: true,
-      playerCount: playerList.length,
+      playerCount:
+        playerList.length,
       composition,
     });
   } catch (error) {
-    console.error("Assign roles error:", error);
+    console.error(
+      "Assign roles error:",
+      error,
+    );
 
     return NextResponse.json(
       {
         error:
-          "Terjadi kesalahan saat membagikan role.",
+          error instanceof Error
+            ? error.message
+            : "Terjadi kesalahan saat membagikan role.",
       },
       {
         status: 500,

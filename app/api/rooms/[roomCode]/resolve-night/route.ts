@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  determineWinner,
+  GameRole,
+} from "@/lib/game-rules";
 
 type NightAction = {
-  action_type: "kill" | "protect";
+  action_type:
+    | "kill"
+    | "protect";
   target_player_id: string;
 };
 
 type RoleRow = {
   player_id: string;
-  role: "werewolf" | "seer" | "doctor" | "villager";
+  role: GameRole;
 };
 
 export async function POST(
@@ -20,22 +26,37 @@ export async function POST(
   },
 ) {
   try {
-    const { roomCode } = await context.params;
-    const cleanRoomCode = roomCode.trim().toUpperCase();
+    const { roomCode } =
+      await context.params;
 
-    const { data: room, error: roomError } =
-      await supabaseAdmin
-        .from("rooms")
-        .select("id, night_number, day_number")
-        .eq("code", cleanRoomCode)
-        .single();
+    const cleanRoomCode =
+      roomCode
+        .trim()
+        .toUpperCase();
 
-    if (roomError || !room) {
-      console.error("Resolve night room error:", roomError);
+    const {
+      data: room,
+      error: roomError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .select(
+        `
+          id,
+          night_number,
+          day_number
+        `,
+      )
+      .eq("code", cleanRoomCode)
+      .single();
 
+    if (
+      roomError ||
+      !room
+    ) {
       return NextResponse.json(
         {
-          error: "Room tidak ditemukan.",
+          error:
+            "Room tidak ditemukan.",
         },
         {
           status: 404,
@@ -43,20 +64,37 @@ export async function POST(
       );
     }
 
-    const { data: actions, error: actionError } =
-      await supabaseAdmin
-        .from("night_actions")
-        .select("action_type, target_player_id")
-        .eq("room_id", room.id)
-        .eq("night_number", room.night_number)
-        .in("action_type", ["kill", "protect"]);
+    const {
+      data: actions,
+      error: actionsError,
+    } = await supabaseAdmin
+      .from("night_actions")
+      .select(
+        `
+          action_type,
+          target_player_id
+        `,
+      )
+      .eq("room_id", room.id)
+      .eq(
+        "night_number",
+        room.night_number,
+      )
+      .in("action_type", [
+        "kill",
+        "protect",
+      ]);
 
-    if (actionError) {
-      console.error("Resolve night actions error:", actionError);
+    if (actionsError) {
+      console.error(
+        "Resolve night actions:",
+        actionsError,
+      );
 
       return NextResponse.json(
         {
-          error: "Gagal mengambil hasil malam.",
+          error:
+            "Gagal mengambil hasil malam.",
         },
         {
           status: 500,
@@ -64,84 +102,117 @@ export async function POST(
       );
     }
 
-    const nightActions = (actions ?? []) as NightAction[];
+    const nightActions =
+      (actions ??
+        []) as NightAction[];
 
-    const killVotes = nightActions.filter(
-      (action) => action.action_type === "kill",
-    );
+    const killVotes =
+      nightActions.filter(
+        (action) =>
+          action.action_type ===
+          "kill",
+      );
 
-    const protectAction = nightActions.find(
-      (action) => action.action_type === "protect",
-    );
+    const protectAction =
+      nightActions.find(
+        (action) =>
+          action.action_type ===
+          "protect",
+      );
 
-    const voteCounts = new Map<string, number>();
+    const voteCounts =
+      new Map<string, number>();
 
-    for (const vote of killVotes) {
-      const currentCount =
-        voteCounts.get(vote.target_player_id) ?? 0;
-
+    for (
+      const vote of killVotes
+    ) {
       voteCounts.set(
         vote.target_player_id,
-        currentCount + 1,
+        (voteCounts.get(
+          vote.target_player_id,
+        ) ?? 0) + 1,
       );
     }
 
-    const sortedVotes = Array.from(
-      voteCounts.entries(),
-    ).sort(
-      (first, second) => second[1] - first[1],
-    );
+    const sortedVotes =
+      Array.from(
+        voteCounts.entries(),
+      ).sort(
+        (first, second) =>
+          second[1] -
+          first[1],
+      );
 
-    let attackedPlayerId: string | null = null;
+    let attackedPlayerId:
+      | string
+      | null = null;
+
     let isTie = false;
 
-    if (sortedVotes.length > 0) {
-      attackedPlayerId = sortedVotes[0][0];
+    if (
+      sortedVotes.length > 0
+    ) {
+      attackedPlayerId =
+        sortedVotes[0][0];
 
       if (
         sortedVotes.length > 1 &&
-        sortedVotes[0][1] === sortedVotes[1][1]
+        sortedVotes[0][1] ===
+          sortedVotes[1][1]
       ) {
+        attackedPlayerId =
+          null;
+
         isTie = true;
-        attackedPlayerId = null;
       }
     }
 
     const protectedPlayerId =
-      protectAction?.target_player_id ?? null;
+      protectAction
+        ?.target_player_id ??
+      null;
 
-    let eliminatedPlayerId: string | null = null;
-    let eliminatedPlayerName: string | null = null;
+    let eliminatedPlayerId:
+      | string
+      | null = null;
 
     if (
       attackedPlayerId &&
-      attackedPlayerId !== protectedPlayerId
+      attackedPlayerId !==
+        protectedPlayerId
     ) {
-      eliminatedPlayerId = attackedPlayerId;
+      eliminatedPlayerId =
+        attackedPlayerId;
     }
+
+    let eliminatedPlayerName:
+      | string
+      | null = null;
 
     if (eliminatedPlayerId) {
       const {
         data: eliminatedPlayer,
-        error: eliminatedPlayerError,
+        error:
+          eliminatedPlayerError,
       } = await supabaseAdmin
         .from("players")
-        .select("id, nickname")
-        .eq("id", eliminatedPlayerId)
+        .select(
+          "id, nickname",
+        )
+        .eq(
+          "id",
+          eliminatedPlayerId,
+        )
         .single();
 
       if (
         eliminatedPlayerError ||
         !eliminatedPlayer
       ) {
-        console.error(
-          "Resolve night eliminated player error:",
-          eliminatedPlayerError,
-        );
-
         return NextResponse.json(
           {
-            error: "Korban malam tidak ditemukan.",
+            error:
+              "Korban malam tidak ditemukan.",
           },
           {
             status: 500,
@@ -152,23 +223,23 @@ export async function POST(
       eliminatedPlayerName =
         eliminatedPlayer.nickname;
 
-      const { error: eliminateError } =
-        await supabaseAdmin
-          .from("players")
-          .update({
-            is_alive: false,
-          })
-          .eq("id", eliminatedPlayer.id);
-
-      if (eliminateError) {
-        console.error(
-          "Resolve night eliminate error:",
-          eliminateError,
+      const {
+        error: eliminateError,
+      } = await supabaseAdmin
+        .from("players")
+        .update({
+          is_alive: false,
+        })
+        .eq(
+          "id",
+          eliminatedPlayerId,
         );
 
+      if (eliminateError) {
         return NextResponse.json(
           {
-            error: "Gagal mengeliminasi pemain.",
+            error:
+              "Gagal mengeliminasi korban.",
           },
           {
             status: 500,
@@ -177,25 +248,20 @@ export async function POST(
       }
     }
 
-    // Ambil semua pemain yang masih hidup setelah hasil malam.
     const {
       data: alivePlayers,
-      error: alivePlayersError,
+      error: aliveError,
     } = await supabaseAdmin
       .from("players")
       .select("id")
       .eq("room_id", room.id)
       .eq("is_alive", true);
 
-    if (alivePlayersError) {
-      console.error(
-        "Resolve night alive players error:",
-        alivePlayersError,
-      );
-
+    if (aliveError) {
       return NextResponse.json(
         {
-          error: "Gagal mengecek pemain yang masih hidup.",
+          error:
+            "Gagal mengecek pemain hidup.",
         },
         {
           status: 500,
@@ -208,18 +274,16 @@ export async function POST(
       error: rolesError,
     } = await supabaseAdmin
       .from("player_roles")
-      .select("player_id, role")
+      .select(
+        "player_id, role",
+      )
       .eq("room_id", room.id);
 
     if (rolesError) {
-      console.error(
-        "Resolve night roles error:",
-        rolesError,
-      );
-
       return NextResponse.json(
         {
-          error: "Gagal mengecek kondisi kemenangan.",
+          error:
+            "Gagal mengecek role.",
         },
         {
           status: 500,
@@ -233,35 +297,29 @@ export async function POST(
       ),
     );
 
-    const roleRows = (roles ?? []) as RoleRow[];
+    const roleRows =
+      (roles ??
+        []) as RoleRow[];
 
     const aliveWerewolfCount =
       roleRows.filter(
-        (role) =>
-          role.role === "werewolf" &&
-          aliveIds.has(role.player_id),
+        (item) =>
+          item.role ===
+            "werewolf" &&
+          aliveIds.has(
+            item.player_id,
+          ),
       ).length;
 
     const aliveGoodCount =
-      aliveIds.size - aliveWerewolfCount;
+      aliveIds.size -
+      aliveWerewolfCount;
 
-    let winner:
-      | "village"
-      | "werewolf"
-      | null = null;
-
-    // Village menang bila semua Werewolf mati.
-    if (aliveWerewolfCount === 0) {
-      winner = "village";
-    }
-
-    // Werewolf menang bila jumlah mereka sama atau lebih banyak.
-    if (
-      aliveWerewolfCount > 0 &&
-      aliveWerewolfCount >= aliveGoodCount
-    ) {
-      winner = "werewolf";
-    }
+    const winner =
+      determineWinner({
+        aliveWerewolfCount,
+        aliveGoodCount,
+      });
 
     let announcement =
       "The village wakes up. Nobody died last night.";
@@ -271,50 +329,66 @@ export async function POST(
         "The Werewolves could not agree. Nobody died last night.";
     } else if (
       attackedPlayerId &&
-      attackedPlayerId === protectedPlayerId
+      attackedPlayerId ===
+        protectedPlayerId
     ) {
       announcement =
         "The Doctor saved someone. Nobody died last night.";
-    } else if (eliminatedPlayerName) {
+    } else if (
+      eliminatedPlayerName
+    ) {
       announcement =
         `${eliminatedPlayerName} was eliminated during the night.`;
     }
 
-    if (winner === "village") {
-      announcement += " The Village wins!";
+    if (
+      winner === "village"
+    ) {
+      announcement +=
+        " The Village wins!";
     }
 
-    if (winner === "werewolf") {
-      announcement += " The Werewolves win!";
+    if (
+      winner === "werewolf"
+    ) {
+      announcement +=
+        " The Werewolves win!";
     }
 
-    const nextPhase =
-      winner ? "game_over" : "morning";
+    const {
+      error: updateError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .update({
+        status: winner
+          ? "finished"
+          : "playing",
 
-    const { error: roomUpdateError } =
-      await supabaseAdmin
-        .from("rooms")
-        .update({
-          status: winner ? "finished" : "playing",
-          phase: nextPhase,
-          night_step: null,
-          announcement,
-          eliminated_player_name:
-            eliminatedPlayerName,
-          winner,
-        })
-        .eq("id", room.id);
+        phase: winner
+          ? "game_over"
+          : "morning",
 
-    if (roomUpdateError) {
+        night_step: null,
+
+        announcement,
+
+        eliminated_player_name:
+          eliminatedPlayerName,
+
+        winner,
+      })
+      .eq("id", room.id);
+
+    if (updateError) {
       console.error(
-        "Resolve night room update error:",
-        roomUpdateError,
+        "Resolve night room error:",
+        updateError,
       );
 
       return NextResponse.json(
         {
           error:
-            "Hasil malam selesai, tetapi room gagal diperbarui.",
+            "Hasil malam gagal disimpan.",
         },
         {
           status: 500,
@@ -325,10 +399,12 @@ export async function POST(
     return NextResponse.json({
       success: true,
       isTie,
-      wasProtected: Boolean(
-        attackedPlayerId &&
-          attackedPlayerId === protectedPlayerId,
-      ),
+      wasProtected:
+        Boolean(
+          attackedPlayerId &&
+            attackedPlayerId ===
+              protectedPlayerId,
+        ),
       eliminatedPlayerName,
       aliveWerewolfCount,
       aliveGoodCount,
@@ -337,7 +413,7 @@ export async function POST(
     });
   } catch (error) {
     console.error(
-      "Resolve night unexpected error:",
+      "Resolve night error:",
       error,
     );
 
@@ -346,7 +422,7 @@ export async function POST(
         error:
           error instanceof Error
             ? error.message
-            : "Terjadi kesalahan saat menyelesaikan malam.",
+            : "Terjadi kesalahan saat resolve malam.",
       },
       {
         status: 500,

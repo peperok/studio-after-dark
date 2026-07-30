@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  determineWinner,
+  GameRole,
+} from "@/lib/game-rules";
 
 type VoteRow = {
   target_player_id: string;
@@ -7,7 +11,7 @@ type VoteRow = {
 
 type RoleRow = {
   player_id: string;
-  role: string;
+  role: GameRole;
 };
 
 export async function POST(
@@ -19,29 +23,37 @@ export async function POST(
   },
 ) {
   try {
-    const { roomCode } = await context.params;
+    const { roomCode } =
+      await context.params;
 
-    const cleanRoomCode = roomCode
-      .trim()
-      .toUpperCase();
+    const cleanRoomCode =
+      roomCode
+        .trim()
+        .toUpperCase();
 
-    const { data: room, error: roomError } =
-      await supabaseAdmin
-        .from("rooms")
-        .select(
-          `
-            id,
-            day_number,
-            night_number
-          `,
-        )
-        .eq("code", cleanRoomCode)
-        .single();
+    const {
+      data: room,
+      error: roomError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .select(
+        `
+          id,
+          day_number,
+          night_number
+        `,
+      )
+      .eq("code", cleanRoomCode)
+      .single();
 
-    if (roomError || !room) {
+    if (
+      roomError ||
+      !room
+    ) {
       return NextResponse.json(
         {
-          error: "Room tidak ditemukan.",
+          error:
+            "Room tidak ditemukan.",
         },
         {
           status: 404,
@@ -49,23 +61,25 @@ export async function POST(
       );
     }
 
-    const { data: votes, error: voteError } =
-      await supabaseAdmin
-        .from("day_votes")
-        .select("target_player_id")
-        .eq("room_id", room.id)
-        .eq(
-          "day_number",
-          room.day_number,
-        );
+    const {
+      data: votes,
+      error: votesError,
+    } = await supabaseAdmin
+      .from("day_votes")
+      .select(
+        "target_player_id",
+      )
+      .eq("room_id", room.id)
+      .eq(
+        "day_number",
+        room.day_number,
+      );
 
-    if (voteError) {
-      console.error(voteError);
-
+    if (votesError) {
       return NextResponse.json(
         {
           error:
-            "Gagal mengambil hasil voting.",
+            "Gagal mengambil voting.",
         },
         {
           status: 500,
@@ -76,7 +90,9 @@ export async function POST(
     const voteRows =
       (votes ?? []) as VoteRow[];
 
-    if (voteRows.length === 0) {
+    if (
+      voteRows.length === 0
+    ) {
       return NextResponse.json(
         {
           error:
@@ -88,29 +104,28 @@ export async function POST(
       );
     }
 
-    const voteCounts = new Map<
-      string,
-      number
-    >();
+    const voteCounts =
+      new Map<string, number>();
 
-    for (const vote of voteRows) {
-      const currentCount =
-        voteCounts.get(
-          vote.target_player_id,
-        ) ?? 0;
-
+    for (
+      const vote of voteRows
+    ) {
       voteCounts.set(
         vote.target_player_id,
-        currentCount + 1,
+        (voteCounts.get(
+          vote.target_player_id,
+        ) ?? 0) + 1,
       );
     }
 
-    const sortedVotes = Array.from(
-      voteCounts.entries(),
-    ).sort(
-      (first, second) =>
-        second[1] - first[1],
-    );
+    const sortedVotes =
+      Array.from(
+        voteCounts.entries(),
+      ).sort(
+        (first, second) =>
+          second[1] -
+          first[1],
+      );
 
     const highestCount =
       sortedVotes[0][1];
@@ -118,29 +133,29 @@ export async function POST(
     const tiedPlayers =
       sortedVotes.filter(
         ([, count]) =>
-          count === highestCount,
+          count ===
+          highestCount,
       );
 
-    if (tiedPlayers.length > 1) {
+    if (
+      tiedPlayers.length > 1
+    ) {
       const announcement =
         "The vote ended in a tie. Nobody was eliminated.";
 
-      const { error: tieUpdateError } =
-        await supabaseAdmin
-          .from("rooms")
-          .update({
-            phase: "result",
-            announcement,
-            eliminated_player_name:
-              null,
-          })
-          .eq("id", room.id);
+      const {
+        error: tieError,
+      } = await supabaseAdmin
+        .from("rooms")
+        .update({
+          phase: "result",
+          announcement,
+          eliminated_player_name:
+            null,
+        })
+        .eq("id", room.id);
 
-      if (tieUpdateError) {
-        console.error(
-          tieUpdateError,
-        );
-
+      if (tieError) {
         return NextResponse.json(
           {
             error:
@@ -156,7 +171,8 @@ export async function POST(
         success: true,
         isTie: true,
         winner: null,
-        eliminatedPlayerName: null,
+        eliminatedPlayerName:
+          null,
         announcement,
       });
     }
@@ -166,11 +182,19 @@ export async function POST(
 
     const {
       data: eliminatedPlayer,
-      error: eliminatedPlayerError,
+      error:
+        eliminatedPlayerError,
     } = await supabaseAdmin
       .from("players")
-      .select("id, nickname")
-      .eq("id", eliminatedPlayerId)
+      .select(
+        "id, nickname",
+      )
+      .eq(
+        "id",
+        eliminatedPlayerId,
+      )
+      .eq("room_id", room.id)
+      .eq("is_alive", true)
       .single();
 
     if (
@@ -180,7 +204,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "Pemain yang dieliminasi tidak ditemukan.",
+            "Pemain eliminasi tidak ditemukan.",
         },
         {
           status: 500,
@@ -188,19 +212,19 @@ export async function POST(
       );
     }
 
-    const { error: eliminationError } =
-      await supabaseAdmin
-        .from("players")
-        .update({
-          is_alive: false,
-        })
-        .eq("id", eliminatedPlayer.id);
-
-    if (eliminationError) {
-      console.error(
-        eliminationError,
+    const {
+      error: eliminateError,
+    } = await supabaseAdmin
+      .from("players")
+      .update({
+        is_alive: false,
+      })
+      .eq(
+        "id",
+        eliminatedPlayer.id,
       );
 
+    if (eliminateError) {
       return NextResponse.json(
         {
           error:
@@ -212,32 +236,20 @@ export async function POST(
       );
     }
 
-    const { data: alivePlayers } =
-      await supabaseAdmin
-        .from("players")
-        .select("id")
-        .eq("room_id", room.id)
-        .eq("is_alive", true);
+    const {
+      data: alivePlayers,
+      error: aliveError,
+    } = await supabaseAdmin
+      .from("players")
+      .select("id")
+      .eq("room_id", room.id)
+      .eq("is_alive", true);
 
-    const aliveIds = new Set(
-      (alivePlayers ?? []).map(
-        (player) => player.id,
-      ),
-    );
-
-    const { data: roles, error: roleError } =
-      await supabaseAdmin
-        .from("player_roles")
-        .select("player_id, role")
-        .eq("room_id", room.id);
-
-    if (roleError) {
-      console.error(roleError);
-
+    if (aliveError) {
       return NextResponse.json(
         {
           error:
-            "Gagal memeriksa kondisi kemenangan.",
+            "Gagal mengecek pemain hidup.",
         },
         {
           status: 500,
@@ -245,37 +257,62 @@ export async function POST(
       );
     }
 
-    const roleRows =
-      (roles ?? []) as RoleRow[];
+    const {
+      data: roles,
+      error: rolesError,
+    } = await supabaseAdmin
+      .from("player_roles")
+      .select(
+        "player_id, role",
+      )
+      .eq("room_id", room.id);
 
-    const aliveWerewolves =
+    if (rolesError) {
+      return NextResponse.json(
+        {
+          error:
+            "Gagal mengambil role.",
+        },
+        {
+          status: 500,
+        },
+      );
+    }
+
+    const aliveIds = new Set(
+      (alivePlayers ?? []).map(
+        (player) => player.id,
+      ),
+    );
+
+    const roleRows =
+      (roles ??
+        []) as RoleRow[];
+
+    const aliveWerewolfCount =
       roleRows.filter(
-        (role) =>
-          role.role === "werewolf" &&
-          aliveIds.has(role.player_id),
+        (item) =>
+          item.role ===
+            "werewolf" &&
+          aliveIds.has(
+            item.player_id,
+          ),
       ).length;
 
-    const aliveVillage =
+    const aliveGoodCount =
       aliveIds.size -
-      aliveWerewolves;
+      aliveWerewolfCount;
 
-    let winner:
-      | "village"
-      | "werewolf"
-      | null = null;
-
-    if (aliveWerewolves === 0) {
-      winner = "village";
-    } else if (
-      aliveWerewolves >= aliveVillage
-    ) {
-      winner = "werewolf";
-    }
+    const winner =
+      determineWinner({
+        aliveWerewolfCount,
+        aliveGoodCount,
+      });
 
     const eliminatedRole =
       roleRows.find(
-        (role) =>
-          role.player_id ===
+        (item) =>
+          item.player_id ===
           eliminatedPlayer.id,
       )?.role ?? null;
 
@@ -287,39 +324,47 @@ export async function POST(
         ` Their role was ${eliminatedRole}.`;
     }
 
-    if (winner === "village") {
+    if (
+      winner === "village"
+    ) {
       announcement +=
         " The Village wins!";
     }
 
-    if (winner === "werewolf") {
+    if (
+      winner === "werewolf"
+    ) {
       announcement +=
         " The Werewolves win!";
     }
 
-    const { error: roomUpdateError } =
-      await supabaseAdmin
-        .from("rooms")
-        .update({
-          phase: winner
-            ? "game_over"
-            : "result",
-          announcement,
-          eliminated_player_name:
-            eliminatedPlayer.nickname,
-          winner,
-        })
-        .eq("id", room.id);
+    const {
+      error: roomUpdateError,
+    } = await supabaseAdmin
+      .from("rooms")
+      .update({
+        status: winner
+          ? "finished"
+          : "playing",
+
+        phase: winner
+          ? "game_over"
+          : "result",
+
+        announcement,
+
+        eliminated_player_name:
+          eliminatedPlayer.nickname,
+
+        winner,
+      })
+      .eq("id", room.id);
 
     if (roomUpdateError) {
-      console.error(
-        roomUpdateError,
-      );
-
       return NextResponse.json(
         {
           error:
-            "Pemain tereliminasi, tetapi room gagal diperbarui.",
+            "Hasil voting gagal disimpan.",
         },
         {
           status: 500,
@@ -333,6 +378,8 @@ export async function POST(
       eliminatedPlayerName:
         eliminatedPlayer.nickname,
       eliminatedRole,
+      aliveWerewolfCount,
+      aliveGoodCount,
       winner,
       announcement,
     });
@@ -345,7 +392,9 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Terjadi kesalahan saat menyelesaikan voting.",
+          error instanceof Error
+            ? error.message
+            : "Terjadi kesalahan saat resolve voting.",
       },
       {
         status: 500,
