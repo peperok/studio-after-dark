@@ -18,6 +18,11 @@ type GamePhase =
   | "result"
   | "game_over";
 
+type Winner =
+  | "village"
+  | "werewolf"
+  | null;
+
 type GameSettings = {
   roomId?: string;
   roomCode: string;
@@ -34,10 +39,7 @@ type GameState = {
   nightNumber: number;
   announcement: string;
   eliminatedPlayer: string | null;
-  winner:
-    | "village"
-    | "werewolf"
-    | null;
+  winner: Winner;
   remainingSeconds: number;
   isTimerRunning: boolean;
 };
@@ -68,19 +70,17 @@ async function readJsonResponse(
     return JSON.parse(text);
   } catch {
     console.error(
-      "Non JSON response:",
+      "API mengembalikan response non-JSON:",
       text,
     );
 
     throw new Error(
-      `API error ${response.status}. Cek terminal.`,
+      `API error ${response.status}. Cek Vercel Logs.`,
     );
   }
 }
 
-function formatTime(
-  totalSeconds: number,
-) {
+function formatTime(totalSeconds: number) {
   const safeSeconds = Math.max(
     0,
     totalSeconds,
@@ -138,17 +138,18 @@ export default function HostPage() {
       isTimerRunning: false,
     });
 
-  const channel = useMemo(() => {
-    if (
-      typeof window === "undefined"
-    ) {
-      return null;
-    }
+  const broadcastChannel =
+    useMemo(() => {
+      if (
+        typeof window === "undefined"
+      ) {
+        return null;
+      }
 
-    return new BroadcastChannel(
-      `studio-after-dark-${roomCode}`,
-    );
-  }, [roomCode]);
+      return new BroadcastChannel(
+        `studio-after-dark-${roomCode}`,
+      );
+    }, [roomCode]);
 
   const alivePlayers =
     players.filter(
@@ -189,20 +190,20 @@ export default function HostPage() {
           return {
             ...current,
             remainingSeconds:
-              current.remainingSeconds -
-              1,
+              current.remainingSeconds - 1,
           };
         });
       },
       1000,
     );
 
-    return () =>
+    return () => {
       window.clearInterval(timer);
+    };
   }, [gameState.isTimerRunning]);
 
   useEffect(() => {
-    channel?.postMessage({
+    broadcastChannel?.postMessage({
       roomCode,
       ...gameState,
       joinedPlayers:
@@ -212,7 +213,7 @@ export default function HostPage() {
       readyPlayers: readyCount,
     });
   }, [
-    channel,
+    broadcastChannel,
     roomCode,
     gameState,
     players.length,
@@ -222,9 +223,9 @@ export default function HostPage() {
 
   useEffect(() => {
     return () => {
-      channel?.close();
+      broadcastChannel?.close();
     };
-  }, [channel]);
+  }, [broadcastChannel]);
 
   async function loadPlayers(
     currentRoomId: string,
@@ -251,7 +252,11 @@ export default function HostPage() {
         });
 
     if (error) {
-      console.error(error);
+      console.error(
+        "Load players error:",
+        error,
+      );
+
       return;
     }
 
@@ -274,31 +279,37 @@ export default function HostPage() {
       | null = null;
 
     async function setup() {
-      const { data: room, error } =
-        await supabase
-          .from("rooms")
-          .select(
-            `
-              id,
-              code,
-              phase,
-              night_step,
-              day_number,
-              night_number,
-              night_seconds,
-              discussion_seconds,
-              voting_seconds,
-              reveal_role,
-              announcement,
-              eliminated_player_name,
-              winner
-            `,
-          )
-          .eq("code", roomCode)
-          .single();
+      const {
+        data: room,
+        error,
+      } = await supabase
+        .from("rooms")
+        .select(
+          `
+            id,
+            code,
+            phase,
+            night_step,
+            day_number,
+            night_number,
+            night_seconds,
+            discussion_seconds,
+            voting_seconds,
+            reveal_role,
+            announcement,
+            eliminated_player_name,
+            winner
+          `,
+        )
+        .eq("code", roomCode)
+        .single();
 
       if (error || !room) {
-        console.error(error);
+        console.error(
+          "Load room error:",
+          error,
+        );
+
         return;
       }
 
@@ -319,7 +330,7 @@ export default function HostPage() {
 
       setGameState((current) => ({
         ...current,
-        phase: room.phase,
+        phase: room.phase as GamePhase,
         nightStep:
           room.night_step,
         dayNumber:
@@ -331,7 +342,7 @@ export default function HostPage() {
         eliminatedPlayer:
           room.eliminated_player_name,
         winner:
-          room.winner,
+          room.winner as Winner,
       }));
 
       await loadPlayers(room.id);
@@ -381,16 +392,14 @@ export default function HostPage() {
                 eliminated_player_name:
                   | string
                   | null;
-                winner:
-                  | "village"
-                  | "werewolf"
-                  | null;
+                winner: Winner;
               };
 
             setGameState(
               (current) => ({
                 ...current,
-                phase: updated.phase,
+                phase:
+                  updated.phase,
                 nightStep:
                   updated.night_step,
                 dayNumber:
@@ -458,6 +467,8 @@ export default function HostPage() {
 
       return result;
     } catch (error) {
+      console.error(error);
+
       alert(
         error instanceof Error
           ? error.message
@@ -473,16 +484,32 @@ export default function HostPage() {
   async function assignRoles() {
     if (players.length < 5) {
       alert(
-        "Minimal 5 pemain.",
+        "Minimal 5 pemain untuk memulai.",
       );
 
       return;
     }
 
-    await callEndpoint(
-      `/api/rooms/${roomCode}/assign-roles`,
-      "Gagal membagikan role.",
-    );
+    const confirmed =
+      window.confirm(
+        `Bagikan role untuk ${players.length} pemain?`,
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const result =
+      await callEndpoint(
+        `/api/rooms/${roomCode}/assign-roles`,
+        "Gagal membagikan role.",
+      );
+
+    if (result) {
+      alert(
+        "Role berhasil dibagikan.",
+      );
+    }
   }
 
   async function startWerewolf() {
@@ -548,15 +575,25 @@ export default function HostPage() {
     const result =
       await callEndpoint(
         `/api/rooms/${roomCode}/resolve-night`,
-        "Gagal resolve malam.",
+        "Gagal menyelesaikan malam.",
       );
 
-    if (result) {
-      setGameState((current) => ({
-        ...current,
-        remainingSeconds: 0,
-        isTimerRunning: false,
-      }));
+    if (!result) {
+      return;
+    }
+
+    setGameState((current) => ({
+      ...current,
+      remainingSeconds: 0,
+      isTimerRunning: false,
+    }));
+
+    if (result.winner) {
+      alert(
+        result.winner === "werewolf"
+          ? "Werewolves Win!"
+          : "Village Wins!",
+      );
     }
   }
 
@@ -598,18 +635,24 @@ export default function HostPage() {
     const result =
       await callEndpoint(
         `/api/rooms/${roomCode}/resolve-voting`,
-        "Gagal resolve voting.",
+        "Gagal menyelesaikan voting.",
       );
 
-    if (result) {
-      setGameState((current) => ({
-        ...current,
-        remainingSeconds: 0,
-        isTimerRunning: false,
-      }));
+    if (!result) {
+      return;
+    }
 
+    setGameState((current) => ({
+      ...current,
+      remainingSeconds: 0,
+      isTimerRunning: false,
+    }));
+
+    if (result.winner) {
       alert(
-        result.announcement,
+        result.winner === "werewolf"
+          ? "Werewolves Win!"
+          : "Village Wins!",
       );
     }
   }
@@ -631,17 +674,160 @@ export default function HostPage() {
     }
   }
 
+  async function setManualWinner(
+    winner: "village" | "werewolf",
+  ) {
+    const winnerLabel =
+      winner === "village"
+        ? "Village"
+        : "Werewolves";
+
+    const confirmed =
+      window.confirm(
+        `Tetapkan ${winnerLabel} sebagai pemenang?`,
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const announcement =
+      winner === "village"
+        ? "The Village wins!"
+        : "The Werewolves win!";
+
+    const { error } = await supabase
+      .from("rooms")
+      .update({
+        status: "finished",
+        phase: "game_over",
+        night_step: null,
+        winner,
+        announcement,
+      })
+      .eq("code", roomCode);
+
+    if (error) {
+      console.error(
+        "Set manual winner error:",
+        error,
+      );
+
+      alert(
+        "Gagal menetapkan pemenang.",
+      );
+
+      return;
+    }
+
+    setGameState((current) => ({
+      ...current,
+      phase: "game_over",
+      nightStep: null,
+      winner,
+      announcement,
+      remainingSeconds: 0,
+      isTimerRunning: false,
+    }));
+  }
+
+  async function resetGame() {
+    const confirmed =
+      window.confirm(
+        "Reset game dan kembali ke lobby? Semua role dan vote akan dihapus.",
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const result =
+      await callEndpoint(
+        `/api/rooms/${roomCode}/reset-game`,
+        "Gagal mereset game.",
+      );
+
+    if (!result) {
+      return;
+    }
+
+    for (const player of players) {
+      localStorage.removeItem(
+        `player-role-confirmed-${roomCode}-${player.id}`,
+      );
+    }
+
+    setGameState({
+      phase: "lobby",
+      nightStep: null,
+      dayNumber: 1,
+      nightNumber: 1,
+      announcement: "",
+      eliminatedPlayer: null,
+      winner: null,
+      remainingSeconds: 0,
+      isTimerRunning: false,
+    });
+
+    alert(
+      "Game berhasil direset.",
+    );
+  }
+
+  async function copyJoinLink() {
+    const joinLink =
+      `${window.location.origin}/join?room=${roomCode}`;
+
+    try {
+      await navigator.clipboard.writeText(
+        joinLink,
+      );
+
+      alert(
+        "Join link berhasil disalin.",
+      );
+    } catch {
+      window.prompt(
+        "Copy join link ini:",
+        joinLink,
+      );
+    }
+  }
+
+  function toggleTimer() {
+    if (
+      gameState.remainingSeconds === 0
+    ) {
+      return;
+    }
+
+    setGameState((current) => ({
+      ...current,
+      isTimerRunning:
+        !current.isTimerRunning,
+    }));
+  }
+
+  function addThirtySeconds() {
+    setGameState((current) => ({
+      ...current,
+      remainingSeconds:
+        current.remainingSeconds + 30,
+    }));
+  }
+
   function openDisplay() {
     window.open(
       `/display/${roomCode}`,
       "_blank",
+      "noopener,noreferrer",
     );
   }
 
   return (
     <main className="min-h-screen bg-slate-950 px-5 py-8 text-white">
       <div className="mx-auto max-w-7xl">
-        <header className="flex flex-col gap-4 border-b border-white/10 pb-6 md:flex-row md:items-center md:justify-between">
+        <header className="flex flex-col gap-5 border-b border-white/10 pb-6 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500">
               Host Control
@@ -652,19 +838,29 @@ export default function HostPage() {
             </h1>
           </div>
 
-          <button
-            type="button"
-            onClick={openDisplay}
-            className="rounded-xl bg-white px-4 py-3 font-medium text-slate-950"
-          >
-            Open TV Display
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={copyJoinLink}
+              className="rounded-xl border border-white/10 px-4 py-3 text-sm transition hover:bg-white/10"
+            >
+              Copy Join Link
+            </button>
+
+            <button
+              type="button"
+              onClick={openDisplay}
+              className="rounded-xl bg-white px-4 py-3 text-sm font-medium text-slate-950 transition hover:bg-slate-200"
+            >
+              Open TV Display
+            </button>
+          </div>
         </header>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-[1.5fr_1fr]">
           <section className="space-y-6">
             <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-              <div className="flex justify-between gap-5">
+              <div className="flex flex-col gap-5 sm:flex-row sm:justify-between">
                 <div>
                   <p className="text-sm text-slate-400">
                     Room Code
@@ -675,7 +871,7 @@ export default function HostPage() {
                   </p>
                 </div>
 
-                <div className="text-right">
+                <div className="sm:text-right">
                   <p className="text-sm text-slate-400">
                     Current Phase
                   </p>
@@ -696,16 +892,40 @@ export default function HostPage() {
                   Day {gameState.dayNumber}
                 </p>
 
-                <p className="mt-4 text-6xl font-semibold">
+                <p className="mt-4 text-6xl font-semibold tabular-nums">
                   {formatTime(
                     gameState.remainingSeconds,
                   )}
                 </p>
 
-                <p className="mt-4 text-slate-300">
+                <p className="mt-4 min-h-6 text-slate-300">
                   {gameState.announcement ||
                     "Waiting for the game to begin."}
                 </p>
+
+                <div className="mt-6 flex flex-wrap justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={toggleTimer}
+                    disabled={
+                      gameState.remainingSeconds ===
+                      0
+                    }
+                    className="rounded-xl border border-white/10 px-4 py-2 text-sm transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {gameState.isTimerRunning
+                      ? "Pause Timer"
+                      : "Resume Timer"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={addThirtySeconds}
+                    className="rounded-xl border border-white/10 px-4 py-2 text-sm transition hover:bg-white/10"
+                  >
+                    +30 Seconds
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -728,53 +948,56 @@ export default function HostPage() {
                   onClick={startWerewolf}
                   disabled={
                     isProcessing ||
-                    !allPlayersReady
+                    !allPlayersReady ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="3. Seer Turn"
-                  description="Seer inspect."
+                  description="Seer memeriksa satu pemain."
                   onClick={startSeer}
                   disabled={
                     isProcessing ||
                     gameState.nightStep !==
-                      "werewolf"
+                      "werewolf" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="4. Doctor Turn"
-                  description="Doctor protect."
+                  description="Doctor melindungi satu pemain."
                   onClick={startDoctor}
                   disabled={
                     isProcessing ||
                     gameState.nightStep !==
-                      "seer"
+                      "seer" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="5. Resolve Morning"
-                  description="Resolve hasil malam."
+                  description="Hitung hasil malam dan cek pemenang."
                   onClick={resolveNight}
                   disabled={
                     isProcessing ||
                     gameState.nightStep !==
-                      "doctor"
+                      "doctor" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="6. Start Discussion"
-                  description="Mulai diskusi."
-                  onClick={
-                    startDiscussion
-                  }
+                  description="Mulai diskusi siang."
+                  onClick={startDiscussion}
                   disabled={
                     isProcessing ||
                     gameState.phase !==
-                      "morning"
+                      "morning" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
@@ -785,32 +1008,32 @@ export default function HostPage() {
                   disabled={
                     isProcessing ||
                     gameState.phase !==
-                      "discussion"
+                      "discussion" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="8. Resolve Voting"
-                  description="Hitung dan eliminasi."
+                  description="Hitung vote dan cek pemenang."
                   onClick={resolveVoting}
                   disabled={
                     isProcessing ||
                     gameState.phase !==
-                      "voting"
+                      "voting" ||
+                    Boolean(gameState.winner)
                   }
                 />
 
                 <FlowButton
                   title="9. Next Night"
-                  description="Lanjut malam berikutnya."
+                  description="Mulai malam berikutnya."
                   onClick={nextNight}
                   disabled={
                     isProcessing ||
                     gameState.phase !==
                       "result" ||
-                    Boolean(
-                      gameState.winner,
-                    )
+                    Boolean(gameState.winner)
                   }
                 />
               </div>
@@ -827,6 +1050,17 @@ export default function HostPage() {
                 <span className="rounded-full bg-white/10 px-3 py-1 text-sm">
                   {alivePlayers.length} alive
                 </span>
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-slate-900 p-4">
+                <p className="text-sm text-slate-400">
+                  Ready Status
+                </p>
+
+                <p className="mt-2 text-2xl font-semibold">
+                  {readyCount} /{" "}
+                  {players.length}
+                </p>
               </div>
 
               <div className="mt-5 space-y-3">
@@ -846,7 +1080,7 @@ export default function HostPage() {
                           {player.is_alive
                             ? player.is_ready
                               ? "Alive · Ready"
-                              : "Alive"
+                              : "Alive · Not Ready"
                             : "Eliminated"}
                         </p>
                       </div>
@@ -865,20 +1099,74 @@ export default function HostPage() {
             </div>
 
             {gameState.winner && (
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-6 text-center">
-                <p className="text-sm uppercase tracking-[0.25em] text-slate-500">
-                  Winner
+              <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/5 p-6 text-center">
+                <p className="text-sm uppercase tracking-[0.3em] text-emerald-300">
+                  Game Over
                 </p>
 
-                <p className="mt-3 text-3xl font-semibold capitalize">
-                  {gameState.winner}
+                <p className="mt-4 text-3xl font-semibold">
+                  {gameState.winner ===
+                  "village"
+                    ? "Village Wins"
+                    : "Werewolves Win"}
+                </p>
+
+                <p className="mt-3 text-sm text-slate-300">
+                  {gameState.announcement}
                 </p>
               </div>
             )}
 
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+              <h2 className="text-xl font-semibold">
+                Manual Game Controls
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Gunakan jika host perlu mengakhiri atau mereset game manual.
+              </p>
+
+              <div className="mt-5 space-y-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setManualWinner(
+                      "village",
+                    )
+                  }
+                  disabled={isProcessing}
+                  className="w-full rounded-xl border border-white/10 px-4 py-3 text-sm transition hover:bg-white/10 disabled:opacity-40"
+                >
+                  Village Wins
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setManualWinner(
+                      "werewolf",
+                    )
+                  }
+                  disabled={isProcessing}
+                  className="w-full rounded-xl border border-white/10 px-4 py-3 text-sm transition hover:bg-white/10 disabled:opacity-40"
+                >
+                  Werewolves Win
+                </button>
+
+                <button
+                  type="button"
+                  onClick={resetGame}
+                  disabled={isProcessing}
+                  className="w-full rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200 transition hover:bg-red-500/10 disabled:opacity-40"
+                >
+                  Reset Game
+                </button>
+              </div>
+            </div>
+
             {roomId && (
               <p className="text-center text-xs text-slate-700">
-                {roomId}
+                Room ID: {roomId}
               </p>
             )}
           </aside>
