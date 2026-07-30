@@ -7,15 +7,40 @@ type RequestBody = {
   targetPlayerId?: string;
 };
 
+type PlayerRow = {
+  id: string;
+  room_id: string;
+  nickname: string;
+  player_token: string;
+  is_alive: boolean;
+};
+
+type RoomRow = {
+  id: string;
+  phase: string;
+  night_step: string | null;
+  night_number: number;
+};
+
 async function validateWerewolf(
   playerId: string,
   playerToken: string,
-) {
+): Promise<{
+  error: string | null;
+  player: PlayerRow | null;
+  room: RoomRow | null;
+}> {
   const { data: player, error: playerError } =
     await supabaseAdmin
       .from("players")
       .select(
-        "id, room_id, nickname, player_token, is_alive",
+        `
+          id,
+          room_id,
+          nickname,
+          player_token,
+          is_alive
+        `,
       )
       .eq("id", playerId)
       .eq("player_token", playerToken)
@@ -26,8 +51,14 @@ async function validateWerewolf(
     !player ||
     !player.is_alive
   ) {
+    console.error(
+      "Validate Werewolf player error:",
+      playerError,
+    );
+
     return {
-      error: "Session pemain tidak valid.",
+      error:
+        "Session pemain tidak valid atau pemain sudah tereliminasi.",
       player: null,
       room: null,
     };
@@ -45,9 +76,13 @@ async function validateWerewolf(
     !roleData ||
     roleData.role !== "werewolf"
   ) {
+    console.error(
+      "Validate Werewolf role error:",
+      roleError,
+    );
+
     return {
-      error:
-        "Pemain ini bukan Werewolf.",
+      error: "Pemain ini bukan Werewolf.",
       player: null,
       room: null,
     };
@@ -57,7 +92,12 @@ async function validateWerewolf(
     await supabaseAdmin
       .from("rooms")
       .select(
-        "id, phase, night_step, night_number",
+        `
+          id,
+          phase,
+          night_step,
+          night_number
+        `,
       )
       .eq("id", player.room_id)
       .single();
@@ -68,6 +108,11 @@ async function validateWerewolf(
     room.phase !== "night" ||
     room.night_step !== "werewolf"
   ) {
+    console.error(
+      "Validate Werewolf room error:",
+      roomError,
+    );
+
     return {
       error:
         "Saat ini bukan giliran Werewolf.",
@@ -78,12 +123,11 @@ async function validateWerewolf(
 
   return {
     error: null,
-    player,
-    room,
+    player: player as PlayerRow,
+    room: room as RoomRow,
   };
 }
 
-// Mengambil daftar target Werewolf.
 export async function POST(request: Request) {
   try {
     const body =
@@ -134,7 +178,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: wolfRoles } =
+    const { data: wolfRoles, error: wolfRoleError } =
       await supabaseAdmin
         .from("player_roles")
         .select("player_id")
@@ -144,35 +188,16 @@ export async function POST(request: Request) {
         )
         .eq("role", "werewolf");
 
-    const werewolfIds = (
-      wolfRoles ?? []
-    ).map((item) => item.player_id);
-
-    const { data: targets, error: targetError } =
-      await supabaseAdmin
-        .from("players")
-        .select("id, nickname")
-        .eq(
-          "room_id",
-          validation.player.room_id,
-        )
-        .eq("is_alive", true)
-        .not(
-          "id",
-          "in",
-          `(${werewolfIds.join(",")})`,
-        )
-        .order("created_at", {
-          ascending: true,
-        });
-
-    if (targetError) {
-      console.error(targetError);
+    if (wolfRoleError) {
+      console.error(
+        "Get Werewolf IDs error:",
+        wolfRoleError,
+      );
 
       return NextResponse.json(
         {
           error:
-            "Gagal mengambil target.",
+            "Gagal mengambil daftar Werewolf.",
         },
         {
           status: 500,
@@ -180,7 +205,59 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: existingAction } =
+    const werewolfIds = new Set(
+      (wolfRoles ?? []).map(
+        (item) => item.player_id,
+      ),
+    );
+
+    const { data: alivePlayers, error: playerError } =
+      await supabaseAdmin
+        .from("players")
+        .select(
+          `
+            id,
+            nickname,
+            created_at
+          `,
+        )
+        .eq(
+          "room_id",
+          validation.player.room_id,
+        )
+        .eq("is_alive", true)
+        .order("created_at", {
+          ascending: true,
+        });
+
+    if (playerError) {
+      console.error(
+        "Get Werewolf targets error:",
+        playerError,
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Gagal mengambil target Werewolf.",
+        },
+        {
+          status: 500,
+        },
+      );
+    }
+
+    const targets = (alivePlayers ?? [])
+      .filter(
+        (player) =>
+          !werewolfIds.has(player.id),
+      )
+      .map((player) => ({
+        id: player.id,
+        nickname: player.nickname,
+      }));
+
+    const { data: existingAction, error: existingError } =
       await supabaseAdmin
         .from("night_actions")
         .select("target_player_id")
@@ -199,22 +276,32 @@ export async function POST(request: Request) {
         .eq("action_type", "kill")
         .maybeSingle();
 
+    if (existingError) {
+      console.error(
+        "Get existing Werewolf action error:",
+        existingError,
+      );
+    }
+
     return NextResponse.json({
-      targets: targets ?? [],
+      success: true,
+      targets,
       selectedTargetId:
         existingAction?.target_player_id ??
         null,
     });
   } catch (error) {
     console.error(
-      "Get Werewolf targets error:",
+      "Get Werewolf targets unexpected error:",
       error,
     );
 
     return NextResponse.json(
       {
         error:
-          "Terjadi kesalahan saat mengambil target.",
+          error instanceof Error
+            ? error.message
+            : "Terjadi kesalahan saat mengambil target Werewolf.",
       },
       {
         status: 500,
@@ -223,7 +310,6 @@ export async function POST(request: Request) {
   }
 }
 
-// Mengirim atau mengganti vote Werewolf.
 export async function PUT(request: Request) {
   try {
     const body =
@@ -252,7 +338,7 @@ export async function PUT(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Data vote belum lengkap.",
+            "Data vote Werewolf belum lengkap.",
         },
         {
           status: 400,
@@ -286,7 +372,14 @@ export async function PUT(request: Request) {
     const { data: target, error: targetError } =
       await supabaseAdmin
         .from("players")
-        .select("id, room_id, is_alive")
+        .select(
+          `
+            id,
+            room_id,
+            nickname,
+            is_alive
+          `,
+        )
         .eq("id", targetPlayerId)
         .eq(
           "room_id",
@@ -307,12 +400,29 @@ export async function PUT(request: Request) {
       );
     }
 
-    const { data: targetRole } =
+    const { data: targetRole, error: targetRoleError } =
       await supabaseAdmin
         .from("player_roles")
         .select("role")
         .eq("player_id", target.id)
         .single();
+
+    if (targetRoleError) {
+      console.error(
+        "Get target role error:",
+        targetRoleError,
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Gagal memeriksa target.",
+        },
+        {
+          status: 500,
+        },
+      );
+    }
 
     if (targetRole?.role === "werewolf") {
       return NextResponse.json(
@@ -331,7 +441,8 @@ export async function PUT(request: Request) {
         .from("night_actions")
         .upsert(
           {
-            room_id: validation.room.id,
+            room_id:
+              validation.room.id,
             night_number:
               validation.room.night_number,
             actor_player_id:
@@ -347,12 +458,15 @@ export async function PUT(request: Request) {
         );
 
     if (actionError) {
-      console.error(actionError);
+      console.error(
+        "Save Werewolf vote error:",
+        actionError,
+      );
 
       return NextResponse.json(
         {
           error:
-            "Gagal menyimpan vote.",
+            "Gagal menyimpan vote Werewolf.",
         },
         {
           status: 500,
@@ -360,36 +474,7 @@ export async function PUT(request: Request) {
       );
     }
 
-    const { count: totalWerewolves } =
-      await supabaseAdmin
-        .from("player_roles")
-        .select("*", {
-          count: "exact",
-          head: true,
-        })
-        .eq(
-          "room_id",
-          validation.room.id,
-        )
-        .eq("role", "werewolf");
-
-    const { data: alivePlayers } =
-      await supabaseAdmin
-        .from("players")
-        .select("id")
-        .eq(
-          "room_id",
-          validation.room.id,
-        )
-        .eq("is_alive", true);
-
-    const aliveIds = new Set(
-      (alivePlayers ?? []).map(
-        (player) => player.id,
-      ),
-    );
-
-    const { data: wolfRoles } =
+    const { data: wolfRoles, error: wolfRoleError } =
       await supabaseAdmin
         .from("player_roles")
         .select("player_id")
@@ -399,19 +484,46 @@ export async function PUT(request: Request) {
         )
         .eq("role", "werewolf");
 
-    const aliveWerewolfCount = (
-      wolfRoles ?? []
-    ).filter((wolf) =>
-      aliveIds.has(wolf.player_id),
-    ).length;
+    if (wolfRoleError) {
+      console.error(
+        "Count Werewolves error:",
+        wolfRoleError,
+      );
+    }
 
-    const { count: submittedCount } =
+    const { data: alivePlayers, error: aliveError } =
+      await supabaseAdmin
+        .from("players")
+        .select("id")
+        .eq(
+          "room_id",
+          validation.room.id,
+        )
+        .eq("is_alive", true);
+
+    if (aliveError) {
+      console.error(
+        "Get alive players error:",
+        aliveError,
+      );
+    }
+
+    const aliveIds = new Set(
+      (alivePlayers ?? []).map(
+        (player) => player.id,
+      ),
+    );
+
+    const aliveWerewolfIds = (
+      wolfRoles ?? []
+    )
+      .map((wolf) => wolf.player_id)
+      .filter((id) => aliveIds.has(id));
+
+    const { data: submittedActions, error: submittedError } =
       await supabaseAdmin
         .from("night_actions")
-        .select("*", {
-          count: "exact",
-          head: true,
-        })
+        .select("actor_player_id")
         .eq(
           "room_id",
           validation.room.id,
@@ -422,25 +534,45 @@ export async function PUT(request: Request) {
         )
         .eq("action_type", "kill");
 
+    if (submittedError) {
+      console.error(
+        "Count Werewolf votes error:",
+        submittedError,
+      );
+    }
+
+    const submittedAliveWerewolves =
+      new Set(
+        (submittedActions ?? [])
+          .map(
+            (action) =>
+              action.actor_player_id,
+          )
+          .filter((id) =>
+            aliveWerewolfIds.includes(id),
+          ),
+      );
+
     return NextResponse.json({
       success: true,
+      targetName: target.nickname,
       submittedCount:
-        submittedCount ?? 0,
+        submittedAliveWerewolves.size,
       requiredCount:
-        aliveWerewolfCount ||
-        totalWerewolves ||
-        0,
+        aliveWerewolfIds.length,
     });
   } catch (error) {
     console.error(
-      "Submit Werewolf vote error:",
+      "Submit Werewolf vote unexpected error:",
       error,
     );
 
     return NextResponse.json(
       {
         error:
-          "Terjadi kesalahan saat mengirim vote.",
+          error instanceof Error
+            ? error.message
+            : "Terjadi kesalahan saat mengirim vote Werewolf.",
       },
       {
         status: 500,
