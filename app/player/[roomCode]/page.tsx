@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  type ReactNode,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { useParams } from "next/navigation";
@@ -24,10 +26,7 @@ type RoomState = {
   night_step: string | null;
   announcement: string;
   eliminated_player_name: string | null;
-  winner:
-    | "village"
-    | "werewolf"
-    | null;
+  winner: "village" | "werewolf" | null;
 };
 
 type CurrentPlayerState = {
@@ -46,25 +45,74 @@ type RoleData = {
   teammates: string[];
 };
 
+type RoleContent = {
+  name: string;
+  description: string;
+  objective: string;
+};
+
+type VillagerVariant = {
+  name: string;
+  description: string;
+};
+
 type TargetPlayer = {
   id: string;
   nickname: string;
 };
 
-const ROLE_CONTENT: Record<
-  PlayerRole,
+const VILLAGER_VARIANTS: VillagerVariant[] = [
   {
-    name: string;
-    description: string;
-    objective: string;
-  }
+    name: "Anak Magang",
+    description:
+      "Tidak ada skill. Tugasmu hanya terlihat sibuk, padahal sebenarnya ngantuk.",
+  },
+  {
+    name: "Anak Kampung",
+    description:
+      "Tidak ada skill. Jadi tugasmu ya layaknya anak kampung.",
+  },
+  {
+    name: "Ketua RT",
+    description:
+      "Tidak ada skill, tapi pengin memimpin desa ini.",
+  },
+  {
+    name: "Punk Jalanan",
+    description:
+      "Tidak ada skill. Penginnya jadi rocker sejati.",
+  },
+  {
+    name: "Kepala Kopdes",
+    description:
+      "Tidak ada skill. Ya tahu lah ya.",
+  },
+  {
+    name: "Ex Menteri Luar Negeri",
+    description:
+      "Tidak ada skill. Hmmm, gitulah ya.",
+  },
+  {
+    name: "Warga Solo",
+    description:
+      "Tidak ada skill. Hanya kembali menjadi orang biasa.",
+  },
+  {
+    name: "Kucing",
+    description: "Meong.",
+  },
+];
+
+const SPECIAL_ROLE_CONTENT: Record<
+  Exclude<PlayerRole, "villager">,
+  RoleContent
 > = {
   werewolf: {
     name: "Werewolf",
     description:
       "Kamu adalah bagian dari kelompok Werewolf.",
     objective:
-      "Eliminasi warga tanpa membuat identitasmu terbongkar.",
+      "Singkirkan warga tanpa membuat identitasmu terbongkar.",
   },
 
   seer: {
@@ -82,15 +130,44 @@ const ROLE_CONTENT: Record<
     objective:
       "Lindungi pemain dari serangan Werewolf.",
   },
-
-  villager: {
-    name: "Villager",
-    description:
-      "Kamu tidak memiliki kemampuan khusus pada malam hari.",
-    objective:
-      "Temukan dan eliminasi seluruh Werewolf.",
-  },
 };
+
+function createStableNumber(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash =
+      (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+}
+
+function getVillagerVariant(playerId: string) {
+  const variantIndex =
+    createStableNumber(playerId) %
+    VILLAGER_VARIANTS.length;
+
+  return VILLAGER_VARIANTS[variantIndex];
+}
+
+function getRoleContent(
+  role: PlayerRole,
+  playerId: string,
+): RoleContent {
+  if (role === "villager") {
+    const variant = getVillagerVariant(playerId);
+
+    return {
+      name: variant.name,
+      description: variant.description,
+      objective:
+        "Kamu tetap berada di tim warga. Temukan dan eliminasi seluruh Werewolf.",
+    };
+  }
+
+  return SPECIAL_ROLE_CONTENT[role];
+}
 
 export default function PlayerPage() {
   const params = useParams<{
@@ -101,27 +178,18 @@ export default function PlayerPage() {
     params.roomCode.toUpperCase();
 
   const [session, setSession] =
-    useState<PlayerSession | null>(
-      null,
-    );
+    useState<PlayerSession | null>(null);
 
   const [room, setRoom] =
-    useState<RoomState | null>(
-      null,
-    );
+    useState<RoomState | null>(null);
 
   const [
     currentPlayer,
     setCurrentPlayer,
-  ] =
-    useState<CurrentPlayerState | null>(
-      null,
-    );
+  ] = useState<CurrentPlayerState | null>(null);
 
   const [roleData, setRoleData] =
-    useState<RoleData | null>(
-      null,
-    );
+    useState<RoleData | null>(null);
 
   const [isLoading, setIsLoading] =
     useState(true);
@@ -163,9 +231,18 @@ export default function PlayerPage() {
   const [
     doctorResult,
     setDoctorResult,
-  ] = useState<string | null>(
-    null,
-  );
+  ] = useState<string | null>(null);
+
+  const currentRoleContent = useMemo(() => {
+    if (!roleData || !session) {
+      return null;
+    }
+
+    return getRoleContent(
+      roleData.role,
+      session.playerId,
+    );
+  }, [roleData, session]);
 
   useEffect(() => {
     const savedSession =
@@ -182,9 +259,7 @@ export default function PlayerPage() {
 
     try {
       const parsedSession =
-        JSON.parse(
-          savedSession,
-        ) as PlayerSession;
+        JSON.parse(savedSession) as PlayerSession;
 
       setSession(parsedSession);
 
@@ -216,20 +291,14 @@ export default function PlayerPage() {
       return;
     }
 
-    const currentSession =
-      session;
+    const currentSession = session;
 
     let roomChannel:
-      | ReturnType<
-          typeof supabase.channel
-        >
+      | ReturnType<typeof supabase.channel>
       | null = null;
 
     async function setupRoom() {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("rooms")
         .select(
           `
@@ -244,10 +313,7 @@ export default function PlayerPage() {
             winner
           `,
         )
-        .eq(
-          "id",
-          currentSession.roomId,
-        )
+        .eq("id", currentSession.roomId)
         .single();
 
       if (error || !data) {
@@ -285,7 +351,6 @@ export default function PlayerPage() {
               payload.new as RoomState;
 
             setRoom(updatedRoom);
-
             setTargets([]);
             setSelectedTarget("");
             setMessage("");
@@ -313,9 +378,7 @@ export default function PlayerPage() {
 
     return () => {
       if (roomChannel) {
-        supabase.removeChannel(
-          roomChannel,
-        );
+        supabase.removeChannel(roomChannel);
       }
     };
   }, [roomCode, session]);
@@ -325,31 +388,17 @@ export default function PlayerPage() {
       return;
     }
 
-    const currentSession =
-      session;
+    const currentSession = session;
 
     let playerChannel:
-      | ReturnType<
-          typeof supabase.channel
-        >
+      | ReturnType<typeof supabase.channel>
       | null = null;
 
     async function setupPlayerStatus() {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("players")
-        .select(
-          `
-            id,
-            is_alive
-          `,
-        )
-        .eq(
-          "id",
-          currentSession.playerId,
-        )
+        .select("id, is_alive")
+        .eq("id", currentSession.playerId)
         .single();
 
       if (error) {
@@ -391,16 +440,12 @@ export default function PlayerPage() {
 
     return () => {
       if (playerChannel) {
-        supabase.removeChannel(
-          playerChannel,
-        );
+        supabase.removeChannel(playerChannel);
       }
     };
   }, [session]);
 
-  async function fetchRole(
-    showRole: boolean,
-  ) {
+  async function fetchRole(showRole: boolean) {
     if (!session) {
       return null;
     }
@@ -414,20 +459,16 @@ export default function PlayerPage() {
         {
           method: "POST",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            playerId:
-              session.playerId,
-            playerToken:
-              session.playerToken,
+            playerId: session.playerId,
+            playerToken: session.playerToken,
           }),
         },
       );
 
-      const result =
-        await response.json();
+      const result = await response.json();
 
       if (!response.ok) {
         setMessage(
@@ -440,8 +481,7 @@ export default function PlayerPage() {
 
       const newRoleData: RoleData = {
         role: result.role,
-        teammates:
-          result.teammates ?? [],
+        teammates: result.teammates ?? [],
       };
 
       setRoleData(newRoleData);
@@ -478,11 +518,7 @@ export default function PlayerPage() {
     }
 
     fetchRole(false);
-  }, [
-    session,
-    room,
-    roleData,
-  ]);
+  }, [session, room, roleData]);
 
   async function confirmRole() {
     if (!session) {
@@ -498,20 +534,16 @@ export default function PlayerPage() {
         {
           method: "POST",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            playerId:
-              session.playerId,
-            playerToken:
-              session.playerToken,
+            playerId: session.playerId,
+            playerToken: session.playerToken,
           }),
         },
       );
 
-      const result =
-        await response.json();
+      const result = await response.json();
 
       if (!response.ok) {
         setMessage(
@@ -543,9 +575,7 @@ export default function PlayerPage() {
     }
   }
 
-  async function loadTargets(
-    endpoint: string,
-  ) {
+  async function loadTargets(endpoint: string) {
     if (!session) {
       return;
     }
@@ -554,25 +584,18 @@ export default function PlayerPage() {
     setMessage("");
 
     try {
-      const response = await fetch(
-        endpoint,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            playerId:
-              session.playerId,
-            playerToken:
-              session.playerToken,
-          }),
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          playerId: session.playerId,
+          playerToken: session.playerToken,
+        }),
+      });
 
-      const result =
-        await response.json();
+      const result = await response.json();
 
       if (!response.ok) {
         setMessage(
@@ -583,19 +606,13 @@ export default function PlayerPage() {
         return;
       }
 
-      setTargets(
-        result.targets ?? [],
-      );
+      setTargets(result.targets ?? []);
 
       setSelectedTarget(
-        result.selectedTargetId ??
-          "",
+        result.selectedTargetId ?? "",
       );
 
-      if (
-        endpoint ===
-        "/api/day-vote"
-      ) {
+      if (endpoint === "/api/day-vote") {
         setMessage(
           `${result.submittedCount}/${result.requiredCount} votes submitted`,
         );
@@ -614,13 +631,8 @@ export default function PlayerPage() {
     }
   }
 
-  async function submitAction(
-    endpoint: string,
-  ) {
-    if (
-      !session ||
-      !selectedTarget
-    ) {
+  async function submitAction(endpoint: string) {
+    if (!session || !selectedTarget) {
       setMessage(
         "Pilih satu pemain terlebih dahulu.",
       );
@@ -632,27 +644,19 @@ export default function PlayerPage() {
     setMessage("");
 
     try {
-      const response = await fetch(
-        endpoint,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            playerId:
-              session.playerId,
-            playerToken:
-              session.playerToken,
-            targetPlayerId:
-              selectedTarget,
-          }),
+      const response = await fetch(endpoint, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          playerId: session.playerId,
+          playerToken: session.playerToken,
+          targetPlayerId: selectedTarget,
+        }),
+      });
 
-      const result =
-        await response.json();
+      const result = await response.json();
 
       if (!response.ok) {
         setMessage(
@@ -680,11 +684,7 @@ export default function PlayerPage() {
     }
   }
 
-  if (
-    isLoading ||
-    !session ||
-    !room
-  ) {
+  if (isLoading || !session || !room) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
         <p className="text-slate-400">
@@ -696,42 +696,24 @@ export default function PlayerPage() {
 
   const currentRoom = room;
 
-  if (
-    currentRoom.phase ===
-    "role_reveal"
-  ) {
-    const roleContent = roleData
-      ? ROLE_CONTENT[
-          roleData.role
-        ]
-      : null;
-
+  if (currentRoom.phase === "role_reveal") {
     return (
       <PageCard>
-        <Label>
-          Keep It Secret
-        </Label>
+        <Label>Keep It Secret</Label>
 
         {!isRoleVisible &&
           !hasConfirmedRole && (
             <>
-              <Title>
-                Your Role Is Ready
-              </Title>
+              <Title>Your Role Is Ready</Title>
 
               <p className="mt-4 text-lg leading-8 text-slate-300">
-                Pastikan tidak ada pemain
-                lain yang melihat layar
-                kamu.
+                Pastikan tidak ada pemain lain
+                yang melihat layar kamu.
               </p>
 
               <ActionButton
-                onClick={() =>
-                  fetchRole(true)
-                }
-                disabled={
-                  isLoadingAction
-                }
+                onClick={() => fetchRole(true)}
+                disabled={isLoadingAction}
               >
                 {isLoadingAction
                   ? "Loading Role..."
@@ -742,45 +724,37 @@ export default function PlayerPage() {
 
         {isRoleVisible &&
           roleData &&
-          roleContent && (
+          currentRoleContent && (
             <>
-              <Label>You Are</Label>
+              <Label>Kamu Adalah</Label>
 
               <Title>
-                {roleContent.name}
+                {currentRoleContent.name}
               </Title>
 
               <p className="mt-5 text-lg leading-8 text-slate-300">
-                {
-                  roleContent.description
-                }
+                {currentRoleContent.description}
               </p>
 
               <div className="mt-6 rounded-2xl bg-slate-900 p-5 text-left">
                 <p className="text-sm text-slate-400">
-                  Your Objective
+                  Misi Kamu
                 </p>
 
                 <p className="mt-2 leading-7 text-slate-200">
-                  {
-                    roleContent.objective
-                  }
+                  {currentRoleContent.objective}
                 </p>
               </div>
 
-              {roleData.role ===
-                "werewolf" && (
+              {roleData.role === "werewolf" && (
                 <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-left">
                   <p className="text-sm text-red-200">
                     Werewolf Teammates
                   </p>
 
                   <p className="mt-2 text-red-100">
-                    {roleData.teammates
-                      .length > 0
-                      ? roleData.teammates.join(
-                          ", ",
-                        )
+                    {roleData.teammates.length > 0
+                      ? roleData.teammates.join(", ")
                       : "Kamu satu-satunya Werewolf."}
                   </p>
                 </div>
@@ -788,9 +762,7 @@ export default function PlayerPage() {
 
               <ActionButton
                 onClick={confirmRole}
-                disabled={
-                  isLoadingAction
-                }
+                disabled={isLoadingAction}
               >
                 I Understand — Hide Role
               </ActionButton>
@@ -800,21 +772,16 @@ export default function PlayerPage() {
         {hasConfirmedRole &&
           !isRoleVisible && (
             <>
-              <Title>
-                Role Confirmed
-              </Title>
+              <Title>Role Confirmed</Title>
 
               <p className="mt-4 text-lg leading-8 text-slate-300">
-                Role kamu sudah
-                disembunyikan. Tunggu
-                host memulai game.
+                Role kamu sudah disembunyikan.
+                Tunggu host memulai game.
               </p>
             </>
           )}
 
-        {message && (
-          <Message>{message}</Message>
-        )}
+        {message && <Message>{message}</Message>}
       </PageCard>
     );
   }
@@ -822,8 +789,7 @@ export default function PlayerPage() {
   if (
     currentPlayer &&
     !currentPlayer.is_alive &&
-    currentRoom.phase !==
-      "game_over"
+    currentRoom.phase !== "game_over"
   ) {
     return (
       <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
@@ -838,27 +804,14 @@ export default function PlayerPage() {
             </h1>
 
             <p className="mt-5 text-lg leading-8 text-slate-300">
-              Kamu sudah tereliminasi
-              dan tidak dapat mengikuti
-              action malam, diskusi,
+              Kamu sudah tereliminasi dan
+              tidak dapat mengikuti action
               atau voting berikutnya.
             </p>
 
-            <div className="mt-7 rounded-2xl border border-white/10 bg-slate-900 p-5">
-              <p className="text-sm text-slate-400">
-                Penting
-              </p>
-
-              <p className="mt-2 leading-7 text-slate-200">
-                Tetap rahasiakan role
-                kamu sampai game benar-benar
-                selesai.
-              </p>
-            </div>
-
-            <p className="mt-7 text-sm text-slate-500">
-              {session.nickname} · Room{" "}
-              {roomCode}
+            <p className="mt-8 text-sm text-slate-500">
+              Tetap rahasiakan role kamu
+              sampai game selesai.
             </p>
           </div>
         </div>
@@ -866,9 +819,7 @@ export default function PlayerPage() {
     );
   }
 
-  if (
-    currentRoom.phase === "night"
-  ) {
+  if (currentRoom.phase === "night") {
     const currentStep =
       currentRoom.night_step;
 
@@ -877,26 +828,22 @@ export default function PlayerPage() {
         ? "werewolf"
         : currentStep === "seer"
           ? "seer"
-          : currentStep ===
-              "doctor"
+          : currentStep === "doctor"
             ? "doctor"
             : null;
 
     if (
       requiredRole &&
-      roleData?.role !==
-        requiredRole
+      roleData?.role !== requiredRole
     ) {
       return (
         <WaitingCard
           label={`Night ${currentRoom.night_number}`}
           title="Keep Your Eyes Closed"
           description={
-            currentStep ===
-            "werewolf"
+            currentStep === "werewolf"
               ? "Werewolves are choosing their target."
-              : currentStep ===
-                  "seer"
+              : currentStep === "seer"
                 ? "The Seer is inspecting a player."
                 : "The Doctor is protecting a player."
           }
@@ -904,35 +851,24 @@ export default function PlayerPage() {
       );
     }
 
-    if (
-      currentStep === "werewolf"
-    ) {
+    if (currentStep === "werewolf") {
       return (
         <TargetAction
           label="Werewolf Turn"
           title="Choose Your Target"
           description="Target dengan suara terbanyak akan diserang."
           targets={targets}
-          selectedTarget={
-            selectedTarget
-          }
-          setSelectedTarget={
-            setSelectedTarget
-          }
-          loading={
-            isLoadingAction
-          }
+          selectedTarget={selectedTarget}
+          setSelectedTarget={setSelectedTarget}
+          loading={isLoadingAction}
           message={message}
           onLoad={() =>
-            loadTargets(
-              "/api/night/werewolf",
-            )
+            loadTargets("/api/night/werewolf")
           }
           onSubmit={async () => {
-            const result =
-              await submitAction(
-                "/api/night/werewolf",
-              );
+            const result = await submitAction(
+              "/api/night/werewolf",
+            );
 
             if (result) {
               setMessage(
@@ -946,19 +882,13 @@ export default function PlayerPage() {
       );
     }
 
-    if (
-      currentStep === "seer"
-    ) {
+    if (currentStep === "seer") {
       if (seerResult) {
         return (
           <PageCard>
-            <Label>
-              Inspection Result
-            </Label>
+            <Label>Inspection Result</Label>
 
-            <Title>
-              {seerResult.targetName}
-            </Title>
+            <Title>{seerResult.targetName}</Title>
 
             <p
               className={`mt-6 text-2xl font-semibold ${
@@ -986,33 +916,22 @@ export default function PlayerPage() {
           title="Inspect One Player"
           description="Pilih satu pemain untuk mengetahui apakah dia Werewolf."
           targets={targets}
-          selectedTarget={
-            selectedTarget
-          }
-          setSelectedTarget={
-            setSelectedTarget
-          }
-          loading={
-            isLoadingAction
-          }
+          selectedTarget={selectedTarget}
+          setSelectedTarget={setSelectedTarget}
+          loading={isLoadingAction}
           message={message}
           onLoad={() =>
-            loadTargets(
-              "/api/night/seer",
-            )
+            loadTargets("/api/night/seer")
           }
           onSubmit={async () => {
-            const result =
-              await submitAction(
-                "/api/night/seer",
-              );
+            const result = await submitAction(
+              "/api/night/seer",
+            );
 
             if (result) {
               setSeerResult({
-                targetName:
-                  result.targetName,
-                isWerewolf:
-                  result.isWerewolf,
+                targetName: result.targetName,
+                isWerewolf: result.isWerewolf,
               });
             }
           }}
@@ -1022,28 +941,22 @@ export default function PlayerPage() {
       );
     }
 
-    if (
-      currentStep === "doctor"
-    ) {
+    if (currentStep === "doctor") {
       if (doctorResult) {
         return (
           <PageCard>
-            <Label>
-              Protection Confirmed
-            </Label>
+            <Label>Protection Confirmed</Label>
 
-            <Title>
-              {doctorResult}
-            </Title>
+            <Title>{doctorResult}</Title>
 
             <p className="mt-5 text-lg leading-8 text-slate-300">
-              Pemain ini dilindungi
-              untuk malam ini.
+              Pemain ini dilindungi untuk
+              malam ini.
             </p>
 
             <p className="mt-6 text-sm text-slate-500">
-              Tunggu instruksi
-              berikutnya dari host.
+              Tunggu instruksi berikutnya
+              dari host.
             </p>
           </PageCard>
         );
@@ -1055,31 +968,20 @@ export default function PlayerPage() {
           title="Protect One Player"
           description="Pilih satu pemain yang ingin kamu lindungi malam ini."
           targets={targets}
-          selectedTarget={
-            selectedTarget
-          }
-          setSelectedTarget={
-            setSelectedTarget
-          }
-          loading={
-            isLoadingAction
-          }
+          selectedTarget={selectedTarget}
+          setSelectedTarget={setSelectedTarget}
+          loading={isLoadingAction}
           message={message}
           onLoad={() =>
-            loadTargets(
-              "/api/night/doctor",
-            )
+            loadTargets("/api/night/doctor")
           }
           onSubmit={async () => {
-            const result =
-              await submitAction(
-                "/api/night/doctor",
-              );
+            const result = await submitAction(
+              "/api/night/doctor",
+            );
 
             if (result) {
-              setDoctorResult(
-                result.targetName,
-              );
+              setDoctorResult(result.targetName);
             }
           }}
           loadLabel="Show Players"
@@ -1097,36 +999,24 @@ export default function PlayerPage() {
     );
   }
 
-  if (
-    currentRoom.phase ===
-    "voting"
-  ) {
+  if (currentRoom.phase === "voting") {
     return (
       <TargetAction
         label={`Day ${currentRoom.day_number}`}
         title="Vote for a Player"
         description="Pilih pemain yang paling kamu curigai sebagai Werewolf."
         targets={targets}
-        selectedTarget={
-          selectedTarget
-        }
-        setSelectedTarget={
-          setSelectedTarget
-        }
-        loading={
-          isLoadingAction
-        }
+        selectedTarget={selectedTarget}
+        setSelectedTarget={setSelectedTarget}
+        loading={isLoadingAction}
         message={message}
         onLoad={() =>
-          loadTargets(
-            "/api/day-vote",
-          )
+          loadTargets("/api/day-vote")
         }
         onSubmit={async () => {
-          const result =
-            await submitAction(
-              "/api/day-vote",
-            );
+          const result = await submitAction(
+            "/api/day-vote",
+          );
 
           if (result) {
             setMessage(
@@ -1140,17 +1030,13 @@ export default function PlayerPage() {
     );
   }
 
-  if (
-    currentRoom.phase ===
-    "game_over"
-  ) {
+  if (currentRoom.phase === "game_over") {
     return (
       <PageCard>
         <Label>Game Over</Label>
 
         <Title>
-          {currentRoom.winner ===
-          "village"
+          {currentRoom.winner === "village"
             ? "The Village Wins"
             : "The Werewolves Win"}
         </Title>
@@ -1160,25 +1046,20 @@ export default function PlayerPage() {
             "The game has ended."}
         </p>
 
-        {roleData && (
+        {currentRoleContent && (
           <div className="mt-7 rounded-2xl bg-slate-900 p-5">
             <p className="text-sm text-slate-400">
               Your Role
             </p>
 
             <p className="mt-2 text-2xl font-semibold">
-              {
-                ROLE_CONTENT[
-                  roleData.role
-                ].name
-              }
+              {currentRoleContent.name}
             </p>
           </div>
         )}
 
         <p className="mt-7 text-sm text-slate-500">
-          {session.nickname} · Room{" "}
-          {roomCode}
+          {session.nickname} · Room {roomCode}
         </p>
       </PageCard>
     );
@@ -1191,19 +1072,15 @@ export default function PlayerPage() {
       </Label>
 
       <Title>
-        {currentRoom.phase ===
-        "lobby"
+        {currentRoom.phase === "lobby"
           ? `Welcome, ${session.nickname}`
-          : currentRoom.phase ===
-              "morning"
+          : currentRoom.phase === "morning"
             ? currentRoom.eliminated_player_name
               ? `${currentRoom.eliminated_player_name} Was Eliminated`
               : "Nobody Died"
-            : currentRoom.phase ===
-                "discussion"
+            : currentRoom.phase === "discussion"
               ? "Discussion Time"
-              : currentRoom.phase ===
-                  "result"
+              : currentRoom.phase === "result"
                 ? currentRoom.eliminated_player_name
                   ? `${currentRoom.eliminated_player_name} Was Eliminated`
                   : "Voting Ended in a Tie"
@@ -1212,15 +1089,13 @@ export default function PlayerPage() {
 
       <p className="mt-5 text-lg leading-8 text-slate-300">
         {currentRoom.announcement ||
-          (currentRoom.phase ===
-          "lobby"
+          (currentRoom.phase === "lobby"
             ? "Kamu sudah masuk. Tunggu host memulai game."
             : "Menunggu instruksi dari host.")}
       </p>
 
       <p className="mt-8 text-sm text-slate-500">
-        {session.nickname} · Room{" "}
-        {roomCode}
+        {session.nickname} · Room {roomCode}
       </p>
     </PageCard>
   );
@@ -1229,7 +1104,7 @@ export default function PlayerPage() {
 function PageCard({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
@@ -1254,7 +1129,6 @@ function WaitingCard({
   return (
     <PageCard>
       <Label>{label}</Label>
-
       <Title>{title}</Title>
 
       <p className="mt-5 text-lg leading-8 text-slate-300">
@@ -1262,8 +1136,7 @@ function WaitingCard({
       </p>
 
       <p className="mt-7 text-sm text-slate-500">
-        Jangan melihat layar pemain
-        lain.
+        Jangan melihat layar pemain lain.
       </p>
     </PageCard>
   );
@@ -1288,9 +1161,7 @@ function TargetAction({
   description: string;
   targets: TargetPlayer[];
   selectedTarget: string;
-  setSelectedTarget: (
-    id: string,
-  ) => void;
+  setSelectedTarget: (id: string) => void;
   loading: boolean;
   message: string;
   onLoad: () => void;
@@ -1301,7 +1172,6 @@ function TargetAction({
   return (
     <PageCard>
       <Label>{label}</Label>
-
       <Title>{title}</Title>
 
       <p className="mt-5 text-lg leading-8 text-slate-300">
@@ -1313,51 +1183,42 @@ function TargetAction({
           onClick={onLoad}
           disabled={loading}
         >
-          {loading
-            ? "Loading..."
-            : loadLabel}
+          {loading ? "Loading..." : loadLabel}
         </ActionButton>
       ) : (
         <>
           <div className="mt-8 space-y-3 text-left">
-            {targets.map(
-              (target) => (
-                <label
-                  key={target.id}
-                  className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 transition ${
-                    selectedTarget ===
-                    target.id
-                      ? "border-white bg-white/10"
-                      : "border-white/10 hover:bg-white/5"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="target-player"
-                    checked={
-                      selectedTarget ===
-                      target.id
-                    }
-                    onChange={() =>
-                      setSelectedTarget(
-                        target.id,
-                      )
-                    }
-                  />
+            {targets.map((target) => (
+              <label
+                key={target.id}
+                className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 transition ${
+                  selectedTarget === target.id
+                    ? "border-white bg-white/10"
+                    : "border-white/10 hover:bg-white/5"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="target-player"
+                  checked={
+                    selectedTarget === target.id
+                  }
+                  onChange={() =>
+                    setSelectedTarget(target.id)
+                  }
+                />
 
-                  <span className="font-medium">
-                    {target.nickname}
-                  </span>
-                </label>
-              ),
-            )}
+                <span className="font-medium">
+                  {target.nickname}
+                </span>
+              </label>
+            ))}
           </div>
 
           <ActionButton
             onClick={onSubmit}
             disabled={
-              loading ||
-              !selectedTarget
+              loading || !selectedTarget
             }
           >
             {loading
@@ -1367,9 +1228,7 @@ function TargetAction({
         </>
       )}
 
-      {message && (
-        <Message>{message}</Message>
-      )}
+      {message && <Message>{message}</Message>}
     </PageCard>
   );
 }
@@ -1377,7 +1236,7 @@ function TargetAction({
 function Label({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <p className="text-sm uppercase tracking-[0.3em] text-slate-500">
@@ -1389,7 +1248,7 @@ function Label({
 function Title({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <h1 className="mt-5 text-4xl font-semibold">
@@ -1403,7 +1262,7 @@ function ActionButton({
   onClick,
   disabled,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
 }) {
@@ -1422,7 +1281,7 @@ function ActionButton({
 function Message({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-200">
